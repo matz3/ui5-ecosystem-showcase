@@ -113,76 +113,34 @@ module.exports = async function applyUI5Middleware(router, options) {
 		return pages;
 	};
 
-	// method to create the middleware manager and to apply the middlewares
-	// to the express router provided as a parameter to this function
-	const apply = async ({ rootProject, rootReader, graph, pages }) => {
-		// find the relevant readers for the dependencies
-		const readers = [];
-		await graph.traverseBreadthFirst(async function ({ project: dep }) {
-			if (dep.getName() === rootProject.getName()) {
-				// Ignore root project
-				return;
-			}
-			readers.push(dep.getReader({ style: "runtime" }));
+	// method to assemble the UI5 middleware via the public @ui5/server serveMiddleware
+	// API and to apply it to the express router provided as a parameter to this function
+	const apply = async ({ graph, pages }) => {
+		// Public embedding API (@ui5/server v5): returns a single mountable middleware plus
+		// a close() releasing the BuildServer's watcher and build-cache handle. It internally
+		// assembles the reader collections and the middleware stack that this plugin used to
+		// build by hand against the internal MiddlewareManager. liveReload is forced off by
+		// the API (the embedding host owns the live-reload WebSocket server).
+		const { serveMiddleware } = await import("@ui5/server");
+		const { middleware, close } = await serveMiddleware(graph, {
+			//sendSAPTargetCSP,
+			//serveCSPReports,
+			//simpleIndex: true,
 		});
+		router.use(middleware);
 
-		const { createReaderCollection } = await import("@ui5/fs/resourceFactory");
-
-		// create a reader collection for the dependencies
-		const dependencies = createReaderCollection({
-			name: `Dependency reader collection for project ${rootProject.getName()}`,
-			readers,
-		});
-
-		// TODO change to ReaderCollection once duplicates are sorted out
-		const combo = createReaderCollection({
-			name: "server - prioritize workspace over dependencies",
-			readers: [rootReader, dependencies],
-		});
-		const resources = {
-			rootProject: rootReader,
-			dependencies: dependencies,
-			all: combo,
-		};
-
-		// TODO: rework ui5-server API and make public
-		const { default: MiddlewareManager } = await import("@ui5/server/internal/MiddlewareManager");
-		const middlewareManager = new MiddlewareManager({
-			graph,
-			rootProject,
-			resources,
-			options: {
-				//sendSAPTargetCSP,
-				//serveCSPReports,
-				//simpleIndex: true
-				liveReload: { active: false, token: null },
-			},
-		});
-		await middlewareManager.applyMiddleware(router);
+		// Expose teardown so the caller can release the watcher and cache handle on shutdown.
+		router.closeUI5Middleware = close;
 
 		// custom pages are not collectible in lazy loading mode
 		if (!pages) {
 			return;
 		}
-		// collect app pages from middlewares implementing the getAppPages
-		// which will only work if the middleware is executed synchronously
-		middlewareManager.middlewareExecutionOrder?.map((name) => {
-			const { middleware } = middlewareManager.middleware?.[name] || {};
-			if (typeof middleware?.getAppPages === "function") {
-				if (!options.lazy) {
-					const customAppPages = middleware.getAppPages();
-					if (Array.isArray(customAppPages)) {
-						pages.push(...customAppPages);
-					} else {
-						if (customAppPages) {
-							log.warn(`The middleware ${name} returns an unexpected value for "getAppPages". The value must be either undefined or string[]! Ignoring app pages from middleware!`);
-						}
-					}
-				} else {
-					log.warn(`The middleware ${name} returns a function for "getAppPages" but the lazy option is enabled. The function will not be executed!`);
-				}
-			}
-		});
+		// NOTE (serveMiddleware validation, UI5 CLI PR #1520): the previous implementation
+		// collected additional app pages by calling getAppPages() on each individual middleware
+		// via the internal MiddlewareManager. The public serveMiddleware API intentionally does
+		// not expose the per-middleware handles, so middleware-contributed app pages can no
+		// longer be gathered here. Only the glob-based pages from loadPages() are available.
 	};
 
 	const determineWebappPath = (ui5ConfigPath) => {

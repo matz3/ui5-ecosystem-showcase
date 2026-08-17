@@ -11,9 +11,9 @@
     "directory": "packages/cds-plugin-ui5"
   },
   "dependencies": {
-    "@ui5/fs": "^4",
-    "@ui5/project": "^4",
-    "@ui5/server": "^4",
+    "@ui5/fs": "^5",
+    "@ui5/project": "^5",
+    "@ui5/server": "^5",
     "glob": "^13.0.6",
     "js-yaml": "^4.1.1",
     "node-html-parser": "^7.1.0",
